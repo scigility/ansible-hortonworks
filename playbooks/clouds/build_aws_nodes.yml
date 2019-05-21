@@ -112,6 +112,34 @@
     label: "{{ local_loop.1.id }} - {{ local_loop.1.attachment_set.device }}"
     loop_var: local_loop
 
+# TODO Bug:  The Tag below is not yet correct on the 1. instance creation
+# set dns, similar to name tag
+- block:
+  - name: Record(s) should be added/updated
+    route53:
+      # If you specifiy the 'region', you also need to specifiy 'identifier'
+      #region: "{{ cloud_config.region }}"
+      zone: "{{ aws_route53_zone }}"
+      record: "{{ local_loop.1.tags.Name }}.{{ aws_route53_zone }}"
+      type: "A"
+      ttl: "{{ aws_route53_ttl | default(omit) }}"
+      value: "{{ local_loop.1.public_ip }}"
+      command: create
+      overwrite: "{{ aws_route53_overwrite | default(True) }}"
+      private_zone: "{{ aws_route53_private_zone | default(omit) }}"
+      validate_certs: "{{ aws_route53_validate_certs | default(True) }}"
+      wait: "{{ aws_route53_wait | default(True) }}"
+    with_indexed_items: "{{ ec2_instances }}"
+    register: route53_create
+    loop_control:
+      label: "{{ local_loop.1.tags.Name }}"
+      loop_var: local_loop
+  - debug:
+      var: route53_create
+      verbosity: 1
+  when: aws_route53_enabled | default(False)
+
+
 - name: Wait for SSH to start
   wait_for:
     host: "{{ (outer_loop.public_ip|default(false)== true) | ternary(local_loop.public_ip,local_loop.private_ip) }}"
@@ -122,3 +150,18 @@
   loop_control:
     loop_var: local_loop
   with_items: '{{ current_ec2.instances }}'
+
+# The optional hostname from Route53 feature, needs a working SSH connection (provided by the previous task)
+- name: Set the hostname from Route53 
+  hostname:
+    name: "{{ local_loop.tags.Name }}.{{ aws_route53_zone }}"
+  with_items: '{{ ec2_instances }}'    
+  loop_control:
+    label: "{{ local_loop.tags.Name }}"
+    loop_var: local_loop
+  remote_user:  "{{ cloud_config.admin_username|default('root') }}"
+  become: True
+  delegate_to: "{{ (outer_loop.public_ip|default(false)== true) | ternary(local_loop.public_ip,local_loop.private_ip) }}"
+  when: 
+    - aws_route53_enabled | default(False)
+    - aws_route53_to_hostname | default(False)
